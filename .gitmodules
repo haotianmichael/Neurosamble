@@ -1,0 +1,4 @@
+[submodule "third-party/cutlass"]
+	path = third-party/cutlass
+	url = https://ghfast.top/https://github.com/NVIDIA/cutlass.git
+	branch = main

@@ -1,0 +1,18 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "Debug volta_tensorop_gemm",
+            "type": "cuda-gdb",
+            "request": "launch",
+            "program": "${workspaceFolder}/third-party/cutlass/build/examples/87_blackwell_geforce_gemm_blockwise/87a_blackwell_geforce_fp8_bf16_gemm_blockwise",
+            //"program": "${workspaceFolder}/third-party/cutlass/build/examples/07_volta_tensorop_gemm/07_volta_tensorop_gemm",
+            "args": [],
+            "cwd": "${workspaceFolder}",
+            "stopAtEntry": false,                     
+            "preLaunchTask": "build-volta-example",
+            "miDebuggerPath": "/usr/local/cuda/bin/cuda-gdb",  
+            "environment": []
+        }
+    ]
+}

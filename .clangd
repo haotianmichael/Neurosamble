@@ -1,0 +1,70 @@
+CompileFlags:
+  Compiler: /usr/local/cuda/bin/nvcc
+  Add:
+    # CUDA 基础配置
+    - --cuda-path=/usr/local/cuda
+    - --cuda-gpu-arch=sm_120         # 5090
+    - -I/usr/local/cuda/include
+    - "-xcuda"
+    - "-ferror-limit=0"              # 显示所有错误
+    - --std=c++17
+    
+    # 项目包含路径（必须用绝对路径）
+    - -I/home/nfs/mahaotian/ESA/Neurosamble/third-party/cutlass/include
+    - -I/home/nfs/mahaotian/ESA/Neurosamble/third-party/cutlass/tools/util/include
+    - -I/home/nfs/mahaotian/ESA/Neurosamble/third-party/cutlass/examples/common
+    - -I/home/nfs/mahaotian/ESA/Neurosamble/third-party/cutlass/build/include
+    
+    # pytorch
+    - -I/home/mahaotian/miniconda3/envs/py310/lib/python3.10/site-packages/torch/include
+    - -I/home/mahaotian/miniconda3/envs/py310/lib/python3.10/site-packages/torch/include/torch/csrc/api/include
+    
+    # 智能感知标记
+    - "-D__INTELLISENSE__"
+    - "-D__CLANGD__"
+    
+    # CUDA 版本宏（根据你的实际版本修改）
+    - "-D__CUDACC_VER_MAJOR__=13"     # nvcc --version 查看
+    - "-D__CUDACC_VER_MINOR__=0"      # 根据实际情况修改
+    - "-D__CUDACC__"
+    
+    # GPU 架构宏
+    - "-D__CUDA_ARCH__=1200"           # SM70 = 700, SM75 = 750, SM80 = 800
+    
+    # CUTLASS 特定宏
+    - "-DCUTLASS_NAMESPACE=cutlass"
+    - "-DCUTLASS_ENABLE_TENSOR_CORE_MMA=1"
+    
+    # 屏蔽一些警告
+    - "-Wno-invalid-constexpr"
+    
+  Remove:
+    # 移除 nvcc 特有但 clang 不认识的参数
+    - "-Xfatbin*"
+    - "-gencode*"
+    - "--generate-code*"
+    - "-ccbin*"
+    - "--compiler-options*"
+    - "--expt-extended-lambda"
+    - "--expt-relaxed-constexpr"
+    - "-forward-unknown-to-host-compiler"
+    - "-Werror=cross-execution-space-call"
+    - "-Wno-deprecated-gpu-targets"
+    - "-lineinfo"
+    
+  CompilationDatabase: "build"         # 不要用 compile_commands.json
+
+Diagnostics:
+  Suppress:
+    - "variadic_device_fn"
+    - "attributes_not_allowed"
+    - "cuda_driver_call"
+    - "unused-parameter"
+    - "unused-variable"
+    - "unknown-pragmas"
+
+Hover:
+  ShowAKA: No
+
+InlayHints:
+  Enabled: No

@@ -1,0 +1,11 @@
+add_executable(hgemm_wmma hgemm_wmma.cu)
+target_link_libraries(hgemm_wmma PRIVATE CUDA::cudart CUDA::cublas) 
+if(CMAKE_BUILD_TYPE STREQUAL "Debug")
+    target_compile_options(hgemm_wmma PRIVATE $<$<COMPILE_LANGUAGE:CUDA>:-G>)
+endif()
+
+add_executable(hgemm_mma hgemm_mma.cu)
+target_link_libraries(hgemm_mma PRIVATE CUDA::cudart CUDA::cublas) 
+if(CMAKE_BUILD_TYPE STREQUAL "Debug")
+    target_compile_options(hgemm_mma PRIVATE $<$<COMPILE_LANGUAGE:CUDA>:-G>)
+endif()

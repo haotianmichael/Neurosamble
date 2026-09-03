@@ -1,0 +1,7 @@
+cmake_minimum_required(VERSION 3.20.0)
+project(AwesomeKernels VERSION 0.1.0 LANGUAGES CUDA CXX C)
+set(CMAKE_CUDA_ARCHITECTURES 89)
+find_package(CUDAToolkit)
+add_subdirectory(csrc/sgemm)
+add_subdirectory(csrc/hgemm)
+set(CMAKE_RUNTIME_OUTPUT_DIRECTORY $(CMAKE_BINARY_DIR)/bin)

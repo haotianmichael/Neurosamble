@@ -1,0 +1,8 @@
+examples/**  linguist-documentation=false
+
+examples/**/*.cu   linguist-detectable=true
+examples/**/*.cuh  linguist-detectable=true
+examples/**/*.cu   linguist-language=Cuda
+examples/**/*.cuh  linguist-language=Cuda
+
+*.ptx  linguist-generated=true
