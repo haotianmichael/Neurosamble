@@ -29,20 +29,14 @@ class P:
     REPO       = SRC.parent                               # .../Neurosamble
     OUT_DIR    = _env("NEUROSAMBLE_OUT_DIR", str(REPO / "data"))
 
-    # --- raw ecoli R9 dataset (external, in CALL_ESA) --------------------- #
-    DATA_DIR   = _env("NEUROSAMBLE_DATA_DIR",
-                      "/home/nfs/mahaotian/ESA/CALL_ESA/data/d2_ecoli_r94")
+    # --- ecoli R9 dataset: now vendored into repo data/ ------------------- #
+    DATA_DIR   = _env("NEUROSAMBLE_DATA_DIR", str(REPO / "data"))
     blow5      = DATA_DIR / "ecoli_R9.blow5"
     paf        = DATA_DIR / "truth.paf"
     ref        = DATA_DIR / "ref.fa"
 
-    # --- ONT pore model table (external, in Rawhash2) --------------------- #
-    pore_model = _env(
-        "PORE_MODEL_PATH",
-        "/home/nfs/mahaotian/ESA/Rawhash2/extern/kmer_models/legacy/"
-        "legacy_r9.4_180mv_450bps_6mer/template_median68pA.model",
-    )
-
+    # --- ONT pore model table: vendored into repo data/ ------------------- #
+    pore_model = _env("PORE_MODEL_PATH", str(REPO / "data" / "pore_r9.4_6mer.model"))
     # --- generated artifacts (in this repo's data/) ----------------------- #
     pairs_pkl        = Path(OUT_DIR) / "ecoli_pairs.pkl"
     baseline_encoder = Path(OUT_DIR) / "baseline_encoder.pt"
