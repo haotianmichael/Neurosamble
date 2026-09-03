@@ -22,6 +22,7 @@ import os
 import pickle
 import sys
 from pathlib import Path
+from neurosamble.paths import P
 
 import torch
 import torch.nn as nn
@@ -45,7 +46,7 @@ from neurosamble.model.pooling import AveragePooler
 # --------------------------------------------------------------------------- #
 class Cfg:
     # data
-    pairs_pkl        = "/home/nfs/mahaotian/ESA/Neurosamble/data/ecoli_pairs.pkl"
+    pairs_pkl = str(P.pairs_pkl)
     unit_length      = 300      # ref window in bp  (== index window span)
     input_signal_len = 2000     # samples per window (divisible by downsample_factor)
     downsample_factor = 5
@@ -85,6 +86,7 @@ def build_encoder(cfg: Cfg) -> nn.Module:
         dropout=cfg.dropout,
         input_signal_len=cfg.input_signal_len,
         downsample_factor=cfg.downsample_factor,
+        n_mamba_blocks=cfg.n_blocks
     )
 
 

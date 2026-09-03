@@ -1,15 +1,10 @@
 """Extract N real ecoli reads' signals + ground-truth coords from blow5 + truth.paf."""
 import pickle, random, numpy as np, pyslow5
+from neurosamble.paths import P
 
-DATA = "/home/nfs/mahaotian/ESA/CALL_ESA/data/d2_ecoli_r94"
-BLOW5 = f"{DATA}/ecoli_R9.blow5"
-PAF   = f"{DATA}/truth.paf"
-REF   = f"{DATA}/ref.fa"
-OUT   = "/home/nfs/mahaotian/ESA/Neurosamble/data/ecoli_pairs.pkl"
-
-N          = 5000     # 子采样条数（基线够用；要更多再加）
-TRIM       = 1500     # 丢掉 read 开头的 adapter/stall 采样
-INPUT_LEN  = 2000     # 每条取的样本数（= input_signal_len）
+P.ensure_out(); P.check_inputs()
+BLOW5, PAF, REF, OUT = str(P.blow5), str(P.paf), str(P.ref), str(P.pairs_pkl)
+N, TRIM, INPUT_LEN = 5000, 1500, 2000
 random.seed(42)
 
 # --- paf: read_id -> (tstart, tend, strand, tname)，每条取对齐最长的那条 ---

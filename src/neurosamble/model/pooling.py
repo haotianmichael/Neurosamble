@@ -1,10 +1,7 @@
-import math
-from typing import Dict, Literal, Optional, Tuple, Type
+from typing import Optional, Tuple, Type
 
 import torch
 import torch.nn as nn
-
-from dna2vec.tokenizer  import BPTokenizer
 
 import logging
 
