@@ -6,3 +6,5 @@ CMakeFiles/
 .cache/
 docs/*
 data/
+__pycache__/
+*.pyc
