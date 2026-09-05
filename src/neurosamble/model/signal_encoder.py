@@ -30,6 +30,8 @@ from typing import Optional
 import torch
 import torch.nn as nn
 
+from neurosamble.kernels import MyLinear
+
 
 class _PreNormResidual(nn.Module):
     """x -> x + sublayer(norm(x))."""
@@ -56,6 +58,7 @@ class SignalEncoder(nn.Module):
         dropout: float = 0.1,
         embedding_dim: int = 384,
         input_signal_len: int = 2000,
+        use_custom_kernels: bool = False,
         **kwargs,
     ):
         super().__init__()
@@ -76,7 +79,12 @@ class SignalEncoder(nn.Module):
             kernel_size=downsample_factor, stride=downsample_factor, padding=0,
         )
         self.act = nn.GELU()
-        self.proj = nn.Linear(conv_channels_2, embedding_dim)
+        # First CuTe/CUTLASS replacement target. Default off -> uses the torch
+        # fallback (F.linear), so behavior is identical to nn.Linear unless
+        # ``use_custom_kernels=True`` is passed explicitly.
+        self.proj = MyLinear(
+            conv_channels_2, embedding_dim, use_custom=use_custom_kernels,
+        )
 
         # --- Sequence body --------------------------------------------------
         self.blocks = self._build_body(
@@ -173,5 +181,6 @@ def signal_encoder_from_config(cfg) -> "SignalEncoder":
         dropout=cfg.dropout,
         embedding_dim=cfg.embedding_dim,
         input_signal_len=cfg.input_signal_len,
+        use_custom_kernels=getattr(cfg, "use_custom_kernels", False),
     )
     return encoder, cfg.pooling
