@@ -30,7 +30,7 @@ _SRC = Path(__file__).resolve().parents[2]
 if str(_SRC) not in sys.path:
     sys.path.insert(0, str(_SRC))
 
-from neurosamble.paths import P
+from neurosamble.utils.paths import P
 from neurosamble.model.pore_model import PoreModel
 from neurosamble.model.signal_dataset import SignalPairDataset, signal_collate
 from neurosamble.model.signal_encoder import SignalEncoder

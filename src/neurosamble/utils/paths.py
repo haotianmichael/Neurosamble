@@ -1,15 +1,15 @@
 """
 Central path & data-location config for Neurosamble.
 
-Single source of truth for every filesystem path used by the harness scripts.
-Override any of these without editing code via environment variables, e.g.:
+Single source of truth for every filesystem path. Override any of these without
+editing code via environment variables, e.g.:
 
     export NEUROSAMBLE_DATA_DIR=/some/other/ecoli
     export PORE_MODEL_PATH=/some/other/table.model
 
 Import in scripts:
 
-    from neurosamble.paths import P
+    from neurosamble.utils.paths import P
     print(P.blow5, P.pairs_pkl, P.pore_model)
 """
 from __future__ import annotations
@@ -24,12 +24,12 @@ def _env(key: str, default: str) -> Path:
 
 class P:
     # --- repo layout (derived; don't hardcode) ---------------------------- #
-    # paths.py lives at .../Neurosamble/src/neurosamble/paths.py
-    SRC        = Path(__file__).resolve().parents[1]      # .../Neurosamble/src
-    REPO       = SRC.parent                               # .../Neurosamble
+    # this file lives at .../Neurosamble/src/neurosamble/utils/paths.py
+    SRC        = Path(__file__).resolve().parents[2]     # .../Neurosamble/src
+    REPO       = SRC.parent                              # .../Neurosamble
     OUT_DIR    = _env("NEUROSAMBLE_OUT_DIR", str(REPO / "data"))
 
-    # --- ecoli R9 dataset: now vendored into repo data/ ------------------- #
+    # --- ecoli R9 dataset: vendored into repo data/ ----------------------- #
     DATA_DIR   = _env("NEUROSAMBLE_DATA_DIR", str(REPO / "data"))
     blow5      = DATA_DIR / "ecoli_R9.blow5"
     paf        = DATA_DIR / "truth.paf"
@@ -37,6 +37,7 @@ class P:
 
     # --- ONT pore model table: vendored into repo data/ ------------------- #
     pore_model = _env("PORE_MODEL_PATH", str(REPO / "data" / "pore_r9.4_6mer.model"))
+
     # --- generated artifacts (in this repo's data/) ----------------------- #
     pairs_pkl        = Path(OUT_DIR) / "ecoli_pairs.pkl"
     baseline_encoder = Path(OUT_DIR) / "baseline_encoder.pt"
@@ -53,5 +54,5 @@ class P:
         if missing:
             raise FileNotFoundError(
                 "Missing required input(s):\n  " + "\n  ".join(missing) +
-                "\n(edit neurosamble/paths.py or set the matching env var)"
+                "\n(edit neurosamble/utils/paths.py or set the matching env var)"
             )

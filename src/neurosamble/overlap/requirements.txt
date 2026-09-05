@@ -1,0 +1,17 @@
+# Python dependencies for the Neurosamble overlap -> assembly pipeline
+# (src/neurosamble/overlap). Install with:  pip install -r requirements.txt
+#
+# The model layer (src/neurosamble/model) already requires numpy + torch; these
+# are the ADDITIONAL packages the overlap pipeline needs.
+
+numpy
+torch                 # frozen encoder inference (eval_model / encode)
+faiss-cpu             # IVF index build + streaming query (index_ivf / map_full);
+                      # swap for faiss-gpu to use --faiss_gpu 1 in map_full
+pyslow5               # streaming blow5/slow5 reads in encode.py
+
+# External binaries (NOT pip; invoked via subprocess from run_full.sh, configurable
+# via the MINIMAP2 / MINIASM / RAWHASH2 env vars):
+#   minimap2   - overlap truth (-x ava-ont --for-only) and miniasm -f assembly
+#   miniasm    - assemble each overlap PAF into a GFA
+#   rawhash2   - rawsamble baseline overlaps (-x ava)

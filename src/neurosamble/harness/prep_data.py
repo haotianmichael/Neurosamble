@@ -1,6 +1,6 @@
 """Extract N real ecoli reads' signals + ground-truth coords from blow5 + truth.paf."""
 import pickle, random, numpy as np, pyslow5
-from neurosamble.paths import P
+from neurosamble.utils.paths import P
 
 P.ensure_out(); P.check_inputs()
 BLOW5, PAF, REF, OUT = str(P.blow5), str(P.paf), str(P.ref), str(P.pairs_pkl)
