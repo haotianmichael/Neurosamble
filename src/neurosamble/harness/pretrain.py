@@ -1,6 +1,5 @@
 """
-Stage 1 — canonical PRE-TRAINING, 2-GPU DDP, STRICT replica of ESA's
-pilot_recall.train_encoder_hardneg config:
+Stage 1 — canonical PRE-TRAINING, 2-GPU DDP:
   optimizer=Adam, scheduler=OneCycleLR(max_lr=lr, total_steps=steps+1) [default
   pct_start=0.3], temperature=0.05, lr=1e-4, batch_size=48 (effective, held
   constant via all-gather regardless of GPU count), hard_negatives=8 (30..300bp),

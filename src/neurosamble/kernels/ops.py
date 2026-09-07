@@ -43,6 +43,9 @@ def _load():
     cutlass_include = os.path.abspath(
         os.path.join(this_dir, "..", "..", "..", "third-party", "cutlass", "include")
     )
+    cutlass_util_include = os.path.abspath(
+        os.path.join(this_dir, "..", "..", "..", "third-party", "cutlass", "tools", "util", "include")
+    )
 
     # Target the current device's compute capability (e.g. "8.0"), matching
     # launch.py. Only meaningful when a GPU is visible at compile time.
@@ -54,8 +57,9 @@ def _load():
 
     _EXT = load(
         name="neurosamble_gemm",
-        sources=[os.path.join(csrc_dir, "gemm.cu")],
-        extra_include_paths=[cutlass_include],
+        sources=[os.path.join(csrc_dir, "hgemm_cutlass.cu")],
+        #extra_include_paths=[cutlass_include],
+        extra_include_paths=[cutlass_include, cutlass_util_include],   # <-- 改成这样
         extra_cuda_cflags=[
             "-O3",
             "-std=c++17",

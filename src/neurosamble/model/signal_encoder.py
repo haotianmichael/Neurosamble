@@ -77,13 +77,13 @@ class SignalEncoder(nn.Module):
             kernel_size=downsample_factor, stride=downsample_factor, padding=0,
         )
         self.act = nn.GELU()
-        #self.proj = nn.Linear(conv_channels_2, embedding_dim)
+        self.proj = nn.Linear(conv_channels_2, embedding_dim)
         # First CuTe/CUTLASS replacement target. Default off -> uses the torch
         # fallback (F.linear), so behavior is identical to nn.Linear unless
         # ``use_custom_kernels=True`` is passed explicitly.
-        self.proj = MyLinear(
-            conv_channels_2, embedding_dim, use_custom=use_custom_kernels,
-        )
+        #self.proj = MyLinear(
+        #    conv_channels_2, embedding_dim, use_custom=use_custom_kernels,
+        #)
 
         # --- Sequence body --------------------------------------------------
         self.blocks = self._build_body(

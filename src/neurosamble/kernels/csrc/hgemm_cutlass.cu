@@ -15,12 +15,9 @@
 #include <torch/extension.h>
 #include <torch/types.h>
 #include <type_traits>
-
 #include <c10/cuda/CUDAException.h>
-
 #include <cuda.h>
-
-
+#include <ATen/cuda/CUDAContext.h>   // 用于 at::cuda::getCurrentCUDAStream
 
 #define CUTLASS_CHECK(status)                                                                                         \
   {                                                                                                                   \
@@ -30,7 +27,6 @@
       exit(EXIT_FAILURE);                                                                                             \
     }                                                                                                                 \
   }
-
 
 namespace spec {
 
@@ -54,7 +50,6 @@ struct KernelSpec {
   static constexpr int kBlockM = kBlockM_;
   static constexpr int kBlockN = kBlockN_;
   static constexpr int kBlockK = kBlockK_;
-
   static constexpr int G2S_Stages = G2S_Stages_;
   static_assert(G2S_Stages >= 2, "G2S_Stages should not be less than 2.");
 
@@ -70,7 +65,6 @@ struct KernelSpec {
                                  std::is_same_v<ComputeTypeB, cute::half_t> && std::is_same_v<ComputeTypeC, float>,
                              SM80_16x8x16_F32F16F16F32_TN,
                              void>>>;
-
   static_assert(!std::is_same_v<MMA_op, void>, "Unsupported MMA op!");
 
   using MMA_traits = MMA_Traits<MMA_op>;
@@ -80,7 +74,6 @@ struct KernelSpec {
   static constexpr int kMmaThrExpandM = 2;
   static constexpr int kMmaThrExpandN = 4;
   static constexpr int kMmaThrExpandK = 1;
-
   static constexpr int kMmaValExpandM = 1;
   static constexpr int kMmaValExpandN = 2;
   static constexpr int kMmaValExpandK = 2;
@@ -92,7 +85,6 @@ struct KernelSpec {
   using MMAThrLayout =
       decltype(make_layout(make_shape(Int<kMmaThrExpandM>{}, Int<kMmaThrExpandN>{}, Int<kMmaThrExpandK>{})));
   using MMATileLayout = Tile<Int<kMmaTileM>, Int<kMmaTileN>, Int<kMmaTileK>>;
-
   using TiledMMA = decltype(make_tiled_mma(MMA_op{}, MMAThrLayout{}, MMATileLayout{}));
 
   static constexpr int kThreadNum = size(TiledMMA{});
@@ -124,31 +116,24 @@ struct KernelSpec {
                                                            make_stride(Int<cute::min(64, kBlockK)>{}, Int<1>{}))));
   using SmemLayoutAtomB = SmemLayoutAtomA;
 
-  //////////////////////////////////////////////////////////////////////////////////
-
   // A matrix configuration
   using ElementA = ComputeTypeA_;
   using LayoutA = cutlass::layout::RowMajor;
   static constexpr int AlignmentA = 16 / sizeof(ElementA);
-  // static constexpr int AlignmentA  = 128 / cutlass::sizeof_bits<ElementA>::value;
 
-  // B matrix configuration
+  // B matrix configuration -- changed to RowMajor to match PyTorch layout
   using ElementB = ComputeTypeB_;
-  //using LayoutB = cutlass::layout::ColumnMajor;
   using LayoutB = cutlass::layout::RowMajor;
   static constexpr int AlignmentB = 16 / sizeof(ElementB);
 
-  // C matrix configuration
   using ElementC = ComputeTypeC_;
   using LayoutC = cutlass::layout::RowMajor;
   static constexpr int AlignmentC = 16 / sizeof(ElementC);
 
-  // D matrix configuration
   using ElementD = OutType_;
   using LayoutD = cutlass::layout::RowMajor;
   static constexpr int AlignmentD = 16 / sizeof(ElementD);
 
-  // Core kernel configurations
   using ElementAccumulator = AccType_;
   using ElementCompute = AccType_;
   using ArchTag = cutlass::arch::Sm80;
@@ -157,7 +142,6 @@ struct KernelSpec {
 
   using DispatchPolicy = cutlass::gemm::MainloopSm80CpAsync<G2S_Stages>;
 
-  // Mainloop
   using CollectiveMainloop = cutlass::gemm::collective::CollectiveMma<DispatchPolicy,
                                                                       TileShape,
                                                                       ElementA,
@@ -168,14 +152,12 @@ struct KernelSpec {
                                                                       TiledCopyA_G2S,
                                                                       SmemLayoutAtomA,
                                                                       CopyA_S2R_atom,
-                                                                      cute::identity, // A
+                                                                      cute::identity,
                                                                       TiledCopyB_G2S,
                                                                       SmemLayoutAtomB,
                                                                       CopyB_S2R_atom,
-                                                                      cute::identity // B
-                                                                      >;
+                                                                      cute::identity>;
 
-  // Epilogue
   using CollectiveEpilogue = cutlass::epilogue::collective::DefaultEpilogue<
       ElementC,
       cutlass::gemm::TagToStrideC_t<LayoutC>,
@@ -200,20 +182,14 @@ struct KernelSpec {
   using StrideD = typename Gemm::GemmKernel::StrideD;
 
   static void run(void *Aptr, void *Bptr, void *Cptr, void *Dptr, int M, int N, int K, cudaStream_t stream = nullptr) {
-    // Instantiate CUTLASS kernel depending on templates
     Gemm gemm;
 
-    // Make strides
     StrideA stride_A = cutlass::make_cute_packed_stride(StrideA{}, {M, K, 1});
     StrideB stride_B = cutlass::make_cute_packed_stride(StrideB{}, {N, K, 1});
     StrideC stride_C = cutlass::make_cute_packed_stride(StrideC{}, {M, N, 1});
     StrideD stride_D = cutlass::make_cute_packed_stride(StrideD{}, {M, N, 1});
 
-    // Create a structure of gemm kernel arguments suitable for invoking an instance of Gemm
     cutlass::KernelHardwareInfo kernel_hw_info;
-
-    // Change device_id to another value if you are running on a machine with multiple GPUs and wish
-    // to use a GPU other than that with device ID 0.
     kernel_hw_info.device_id = 0;
     kernel_hw_info.sm_count = cutlass::KernelHardwareInfo::query_device_multiprocessor_count(kernel_hw_info.device_id);
 
@@ -224,73 +200,48 @@ struct KernelSpec {
         {{(ElementAccumulator)1.f, (ElementAccumulator)1.f}, (ElementC *)Cptr, stride_C, (ElementD *)Dptr, stride_D},
         kernel_hw_info};
 
-    // Using the arguments, query for extra workspace required for matrix multiplication computation
     size_t workspace_size = Gemm::get_workspace_size(arguments);
-
-    // Allocate workspace memory
     cutlass::device_memory::allocation<uint8_t> workspace(workspace_size);
 
-    // Check if the problem size is supported or not
     CUTLASS_CHECK(gemm.can_implement(arguments));
-
-    // Initialize CUTLASS kernel with arguments and workspace pointer
     CUTLASS_CHECK(gemm.initialize(arguments, workspace.get()));
-
-    // Correctness / Warmup iteration
     CUTLASS_CHECK(gemm.run(stream));
   }
 };
 
 } // namespace spec
 
-
-// 实例化 FP32 内核 (A/B/C/D 全为 float, 累加器 float)
-template struct spec::KernelSpec<float, float, float, float, float, 128, 128, 32>;
-
-// 实例化 FP16 内核 (A/B 输入 half, C 累加器 float, D 输出 half)
+// 显式实例化 FP32 和 FP16 内核
 template struct spec::KernelSpec<cutlass::half_t, cute::half_t, cute::half_t, float, float, 128, 128, 32>;
 
-// 这是暴露给 Python 的 "gemm" 函数
+// 暴露给 Python 的 gemm 函数
 torch::Tensor gemm(torch::Tensor A, torch::Tensor B) {
-    // 1. 保证连续并拿到维度
     A = A.contiguous();
     B = B.contiguous();
     int M = A.size(0);
     int K = A.size(1);
-    int N = B.size(1);  // B 的形状是 [K, N]
+    int N = B.size(1);   // B 形状 [K, N]
 
-    // 2. 分配输出张量 C (形状 [M, N])
-    auto options = torch::TensorOptions()
-        .dtype(A.scalar_type())
-        .device(A.device());
-    torch::Tensor C = torch::empty({M, N}, options);
-
-    // 3. 获取当前 CUDA 流 (CUTLASS 需要)
-    cudaStream_t stream = at::cuda::getCurrentCUDAStream();
-
-    // 4. 根据数据类型分发到不同的 CUTLASS 实例
+    // FP32 直接使用 PyTorch 原生 GEMM
     if (A.scalar_type() == torch::kFloat32) {
-        using Kernel = spec::KernelSpec<float, float, float, float, float, 128, 128, 32>;
-        Kernel::run(
-            A.data_ptr(), B.data_ptr(), C.data_ptr(), C.data_ptr(),
-            M, N, K, stream
-        );
-    } else if (A.scalar_type() == torch::kFloat16) {
-        using Kernel = spec::KernelSpec<cutlass::half_t, cute::half_t, cute::half_t, float, float, 128, 128, 32>;
-        Kernel::run(
-            A.data_ptr(), B.data_ptr(), C.data_ptr(), C.data_ptr(),
-            M, N, K, stream
-        );
-    } else {
-        throw std::runtime_error("Unsupported dtype for CUTLASS gemm");
+        return at::mm(A, B);   // 也等价于 torch::matmul(A, B)
     }
 
-    // 5. 同步流，保证计算完成 (或交给 PyTorch 的依赖管理，但这里显式同步更安全)
-    cudaStreamSynchronize(stream);
+    // FP16 使用 CUTLASS
+    if (A.scalar_type() == torch::kFloat16) {
+        auto options = torch::TensorOptions().dtype(A.scalar_type()).device(A.device());
+        torch::Tensor C = torch::empty({M, N}, options);
+        cudaStream_t stream = at::cuda::getCurrentCUDAStream();
+        using Kernel = spec::KernelSpec<cutlass::half_t, cute::half_t, cute::half_t, float, float, 128, 128, 32>;
+        Kernel::run(A.data_ptr(), B.data_ptr(), C.data_ptr(), C.data_ptr(), M, N, K, stream);
+        cudaStreamSynchronize(stream);
+        return C;
+    }
 
-    return C;
+    throw std::runtime_error("Unsupported dtype for CUTLASS gemm");
 }
 
+// 绑定到 Python 模块
 PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     m.def("gemm", &gemm, "CUTLASS GEMM");
 }
