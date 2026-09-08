@@ -16,11 +16,6 @@
 #include <torch/types.h>
 #include <type_traits>
 
-#include <c10/cuda/CUDAException.h>
-
-#include <cuda.h>
-
-
 
 #define CUTLASS_CHECK(status)                                                                                         \
   {                                                                                                                   \
@@ -134,8 +129,7 @@ struct KernelSpec {
 
   // B matrix configuration
   using ElementB = ComputeTypeB_;
-  //using LayoutB = cutlass::layout::ColumnMajor;
-  using LayoutB = cutlass::layout::RowMajor;
+  using LayoutB = cutlass::layout::ColumnMajor;
   static constexpr int AlignmentB = 16 / sizeof(ElementB);
 
   // C matrix configuration
@@ -242,55 +236,3 @@ struct KernelSpec {
 };
 
 } // namespace spec
-
-
-// 实例化 FP32 内核 (A/B/C/D 全为 float, 累加器 float)
-template struct spec::KernelSpec<float, float, float, float, float, 128, 128, 32>;
-
-// 实例化 FP16 内核 (A/B 输入 half, C 累加器 float, D 输出 half)
-template struct spec::KernelSpec<cutlass::half_t, cute::half_t, cute::half_t, float, float, 128, 128, 32>;
-
-// 这是暴露给 Python 的 "gemm" 函数
-torch::Tensor gemm(torch::Tensor A, torch::Tensor B) {
-    // 1. 保证连续并拿到维度
-    A = A.contiguous();
-    B = B.contiguous();
-    int M = A.size(0);
-    int K = A.size(1);
-    int N = B.size(1);  // B 的形状是 [K, N]
-
-    // 2. 分配输出张量 C (形状 [M, N])
-    auto options = torch::TensorOptions()
-        .dtype(A.scalar_type())
-        .device(A.device());
-    torch::Tensor C = torch::empty({M, N}, options);
-
-    // 3. 获取当前 CUDA 流 (CUTLASS 需要)
-    cudaStream_t stream = at::cuda::getCurrentCUDAStream();
-
-    // 4. 根据数据类型分发到不同的 CUTLASS 实例
-    if (A.scalar_type() == torch::kFloat32) {
-        using Kernel = spec::KernelSpec<float, float, float, float, float, 128, 128, 32>;
-        Kernel::run(
-            A.data_ptr(), B.data_ptr(), C.data_ptr(), C.data_ptr(),
-            M, N, K, stream
-        );
-    } else if (A.scalar_type() == torch::kFloat16) {
-        using Kernel = spec::KernelSpec<cutlass::half_t, cute::half_t, cute::half_t, float, float, 128, 128, 32>;
-        Kernel::run(
-            A.data_ptr(), B.data_ptr(), C.data_ptr(), C.data_ptr(),
-            M, N, K, stream
-        );
-    } else {
-        throw std::runtime_error("Unsupported dtype for CUTLASS gemm");
-    }
-
-    // 5. 同步流，保证计算完成 (或交给 PyTorch 的依赖管理，但这里显式同步更安全)
-    cudaStreamSynchronize(stream);
-
-    return C;
-}
-
-PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
-    m.def("gemm", &gemm, "CUTLASS GEMM");
-}

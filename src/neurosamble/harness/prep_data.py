@@ -4,7 +4,7 @@ from neurosamble.utils.paths import P
 
 P.ensure_out(); P.check_inputs()
 BLOW5, PAF, REF, OUT = str(P.blow5), str(P.paf), str(P.ref), str(P.pairs_pkl)
-N, TRIM, INPUT_LEN = 5000, 1500, 2000
+N, TRIM, INPUT_LEN = 350000, 1500, 2000
 random.seed(42)
 
 # --- paf: read_id -> (tstart, tend, strand, tname)，每条取对齐最长的那条 ---
