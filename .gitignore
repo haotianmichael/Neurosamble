@@ -8,3 +8,5 @@ docs/*
 data/
 __pycache__/
 *.pyc
+experiment/
+*.log
