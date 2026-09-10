@@ -6,6 +6,7 @@ from torch.utils.cpp_extension import load
 
 current_dir = os.path.dirname(os.path.abspath(__file__))
 cutlass_include_path = os.path.join(current_dir, "../../../third-party/cutlass/include")
+cutlass_util_include_path = os.path.join(current_dir, "../../../third-party/cutlass/tools/util/include")
 sources = [os.path.join(current_dir, filename) for filename in ["launch.cu"]]
 
 os.environ["TORCH_CUDA_ARCH_LIST"] = ".".join(map(str, torch.cuda.get_device_capability()))
@@ -17,6 +18,7 @@ lib = load(
     extra_cuda_cflags=[
         "-O3",
         f"-I{cutlass_include_path}",
+        f"-I{cutlass_util_include_path}",
         "-U__CUDA_NO_HALF_OPERATORS__",
         "-U__CUDA_NO_HALF_CONVERSIONS__",
         "-U__CUDA_NO_HALF2_OPERATORS__",

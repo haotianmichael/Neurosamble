@@ -17,7 +17,7 @@
 #include <type_traits>
 #include <c10/cuda/CUDAException.h>
 #include <cuda.h>
-#include <ATen/cuda/CUDAContext.h>   // 用于 at::cuda::getCurrentCUDAStream
+#include <ATen/cuda/CUDAContext.h>
 
 #define CUTLASS_CHECK(status)                                                                                         \
   {                                                                                                                   \
@@ -121,6 +121,10 @@ struct KernelSpec {
   using LayoutA = cutlass::layout::RowMajor;
   static constexpr int AlignmentA = 16 / sizeof(ElementA);
 
+  // B matrix configuration.
+  // The SM80 *_TN MMA atom contracts over K and needs BOTH operands K-major.
+  // For CUTLASS's B operand (logical shape [N, K]) "K-major" == ColumnMajor.
+  // RowMajor would make B N-major and break the 128-bit cp.async along K.
   using ElementB = ComputeTypeB_;
   using LayoutB = cutlass::layout::ColumnMajor;
   static constexpr int AlignmentB = 16 / sizeof(ElementB);
@@ -168,7 +172,7 @@ struct KernelSpec {
                                                    cutlass::epilogue::thread::ScaleType::Default,
                                                    cutlass::FloatRoundStyle::round_to_nearest,
                                                    ElementC>,
-                                                   cutlass::gemm::EpilogueDefault>;
+      cutlass::gemm::EpilogueDefault>;
 
   using GemmKernel =
       cutlass::gemm::kernel::GemmUniversal<Shape<int, int, int>, CollectiveMainloop, CollectiveEpilogue>;
@@ -196,6 +200,7 @@ struct KernelSpec {
         cutlass::gemm::GemmUniversalMode::kGemm,
         {M, N, K},
         {(ElementA *)Aptr, stride_A, (ElementB *)Bptr, stride_B},
+        // alpha = 1, beta = 0 : plain GEMM output, do NOT add the (uninitialized) C source.
         {{(ElementAccumulator)1.f, (ElementAccumulator)0.f}, (ElementC *)Cptr, stride_C, (ElementD *)Dptr, stride_D},
         kernel_hw_info};
 
@@ -210,29 +215,37 @@ struct KernelSpec {
 
 } // namespace spec
 
-// 显式实例化 FP32 和 FP16 内核
+// Explicit instantiation of the FP16 kernel.
 template struct spec::KernelSpec<cutlass::half_t, cute::half_t, cute::half_t, float, float, 128, 128, 32>;
 
-// 暴露给 Python 的 gemm 函数
+// Python-facing entry point. Contract (unchanged): C = A @ B, all row-major.
+//   A : [M, K] row-major
+//   B : [K, N] row-major
+//   C : [M, N] row-major
+// The *_TN tensor-core kernel needs B K-major, but a row-major [K, N] B is
+// N-major, so we transpose it to [N, K] (K-major) before launching. This keeps
+// the gemm(A, B) = A @ B contract, so ops.py needs no changes.
 torch::Tensor gemm(torch::Tensor A, torch::Tensor B) {
     A = A.contiguous();
     B = B.contiguous();
     int M = A.size(0);
     int K = A.size(1);
-    int N = B.size(0);   // B 形状 [K, N]
+    int N = B.size(1);   // B is [K, N]
 
-    // FP32 直接使用 PyTorch 原生 GEMM
+    // FP32 path: use PyTorch's native GEMM.
     if (A.scalar_type() == torch::kFloat32) {
-        return at::mm(A, B);   // 也等价于 torch::matmul(A, B)
+        return at::mm(A, B);
     }
 
-    // FP16 使用 CUTLASS
+    // FP16 path: CUTLASS.
     if (A.scalar_type() == torch::kFloat16) {
+        // [K, N] (N-major) -> [N, K] (K-major) for the TN kernel.
+        auto Bt = B.transpose(0, 1).contiguous();
         auto options = torch::TensorOptions().dtype(A.scalar_type()).device(A.device());
         torch::Tensor C = torch::empty({M, N}, options);
         cudaStream_t stream = at::cuda::getCurrentCUDAStream();
-        using Kernel = spec::KernelSpec<cutlass::half_t, cute::half_t, cute::half_t, cute::half_t, float, 128, 128, 32>;
-        Kernel::run(A.data_ptr(), B.data_ptr(), C.data_ptr(), C.data_ptr(), M, N, K, stream);
+        using Kernel = spec::KernelSpec<cutlass::half_t, cute::half_t, cute::half_t, float, float, 128, 128, 32>;
+        Kernel::run(A.data_ptr(), Bt.data_ptr(), C.data_ptr(), C.data_ptr(), M, N, K, stream);
         cudaStreamSynchronize(stream);
         return C;
     }
@@ -240,7 +253,6 @@ torch::Tensor gemm(torch::Tensor A, torch::Tensor B) {
     throw std::runtime_error("Unsupported dtype for CUTLASS gemm");
 }
 
-// 绑定到 Python 模块
 PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
-    m.def("gemm", &gemm, "CUTLASS GEMM");
+    m.def("gemm", &gemm, "CUTLASS GEMM: C = A @ B");
 }

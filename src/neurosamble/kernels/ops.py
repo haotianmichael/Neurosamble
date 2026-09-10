@@ -1,16 +1,13 @@
 """JIT-compiled custom GEMM backend + autograd wrapper for a trainable Linear.
 
-The extension in ``csrc/gemm.cu`` exposes a single primitive, ``gemm(A, B) ->
-A @ B``.  All three GEMMs of an ``nn.Linear`` (forward + the two backward
-passes) are composed from it here, inside a ``torch.autograd.Function`` so the
-custom kernel is fully trainable.
+The extension in ``csrc/hgemm_cutlass.cu`` exposes a single primitive,
+``gemm(A, B) -> A @ B``.  All three GEMMs of an ``nn.Linear`` (forward + the two
+backward passes) are composed from it here, inside a ``torch.autograd.Function``
+so the custom kernel is fully trainable.
 
 The extension is compiled lazily on first use with ``cpp_extension.load`` (JIT,
 not AOT) and cached at module scope, so importing this module is cheap and does
 not require a CUDA toolchain until a custom Linear is actually run.
-
-To swap in real CuTe/CUTLASS kernels later, replace the body of ``gemm`` in
-``csrc/gemm.cu`` (keeping its signature); nothing in this file needs to change.
 """
 from __future__ import annotations
 
@@ -24,13 +21,7 @@ _EXT = None
 
 
 def _load():
-    """Compile (once) and return the custom GEMM extension module.
-
-    Mirrors the working JIT configuration from
-    ``examples/cutlass_examples/hgemm_cute/launch.py``: ``-std=c++17``, relaxed
-    constexpr, extended lambda, fast math, and the CUTLASS include path made
-    available (via ``extra_include_paths``) for the future kernel drop-in.
-    """
+    """Compile (once) and return the custom GEMM extension module."""
     global _EXT
     if _EXT is not None:
         return _EXT
@@ -47,8 +38,8 @@ def _load():
         os.path.join(this_dir, "..", "..", "..", "third-party", "cutlass", "tools", "util", "include")
     )
 
-    # Target the current device's compute capability (e.g. "8.0"), matching
-    # launch.py. Only meaningful when a GPU is visible at compile time.
+    # Target the current device's compute capability (e.g. "8.0" / "12.0").
+    # Only meaningful when a GPU is visible at compile time.
     if torch.cuda.is_available():
         os.environ.setdefault(
             "TORCH_CUDA_ARCH_LIST",
@@ -58,8 +49,7 @@ def _load():
     _EXT = load(
         name="neurosamble_gemm",
         sources=[os.path.join(csrc_dir, "hgemm_cutlass.cu")],
-        #extra_include_paths=[cutlass_include],
-        extra_include_paths=[cutlass_include, cutlass_util_include],   # <-- 改成这样
+        extra_include_paths=[cutlass_include, cutlass_util_include],
         extra_cuda_cflags=[
             "-O3",
             "-std=c++17",
@@ -79,11 +69,14 @@ def _load():
 
 
 class CustomLinearFn(torch.autograd.Function):
-    """Autograd wrapper for ``Y = X @ Wᵀ (+ b)`` routed through the custom GEMM.
+    """Autograd wrapper for ``Y = X @ W^T (+ b)`` routed through the custom GEMM.
 
     ``weight`` follows the ``nn.Linear`` convention with shape ``[out, in]``.
     ``x`` may have any leading shape ``[*, in]``; it is flattened to 2-D for the
     GEMM and restored on the way out.
+
+    The custom primitive is a plain matmul ``gemm(A, B) = A @ B`` (both 2-D,
+    row-major), so each of the three Linear GEMMs is expressed in that form.
     """
 
     @staticmethod
@@ -97,7 +90,7 @@ class CustomLinearFn(torch.autograd.Function):
 
         x2d = x.reshape(-1, in_features).contiguous()
         wt = weight.t().contiguous()          # [in, out]
-        y2d = ext.gemm(x2d, wt)               # [M, out]
+        y2d = ext.gemm(x2d, wt)               # x2d @ wt = X @ W^T -> [M, out]
         if bias is not None:
             y2d = y2d + bias
 
@@ -123,7 +116,7 @@ class CustomLinearFn(torch.autograd.Function):
             grad_input = gx2d.reshape(ctx.orig_shape)
 
         if ctx.needs_input_grad[1]:
-            # dW = dYᵀ @ X  ->  [out, M] @ [M, in] = [out, in]
+            # dW = dY^T @ X  ->  [out, M] @ [M, in] = [out, in]
             grad_weight = ext.gemm(gy2d.t().contiguous(), x2d)
 
         if ctx.has_bias and ctx.needs_input_grad[2]:
