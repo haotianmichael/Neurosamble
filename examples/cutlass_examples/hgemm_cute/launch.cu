@@ -168,12 +168,12 @@ torch::Tensor run_hgemm(const torch::Tensor a, const torch::Tensor b, std::optio
 
 PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
   m.def("hgemm_cute_fp16_fp16_fp16_fp16",
-        &(run_hgemm<128, 128, 64, 5, cute::half_t, cute::half_t, cute::half_t>),
+        &(run_hgemm<128, 128, 64, 3, cute::half_t, cute::half_t, cute::half_t>),
         "Run a mixed-precision half 16x8x8 MMA operation using cute.");
   m.def("hgemm_cute_fp16_fp16_fp16_fp32",
-        &(run_hgemm<128, 128, 64, 5, cute::half_t, cute::half_t, cute::half_t, float>),
+        &(run_hgemm<128, 128, 64, 3, cute::half_t, cute::half_t, cute::half_t, float>),
         "Run a mixed-precision half 16x8x8 MMA operation using cute.");
   m.def("hgemm_cute_bf16_bf16_bf16_fp32",
-        &(run_hgemm<128, 128, 64, 5, cute::bfloat16_t, cute::bfloat16_t, cute::bfloat16_t, float>),
+        &(run_hgemm<128, 128, 64, 3, cute::bfloat16_t, cute::bfloat16_t, cute::bfloat16_t, float>),
         "Run a mixed-precisioin half 16x8x8 MMA operation using cute.");
 }

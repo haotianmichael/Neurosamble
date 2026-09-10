@@ -9,7 +9,8 @@ cutlass_include_path = os.path.join(current_dir, "../../../third-party/cutlass/i
 cutlass_util_include_path = os.path.join(current_dir, "../../../third-party/cutlass/tools/util/include")
 sources = [os.path.join(current_dir, filename) for filename in ["launch.cu"]]
 
-os.environ["TORCH_CUDA_ARCH_LIST"] = ".".join(map(str, torch.cuda.get_device_capability()))
+os.environ["TORCH_CUDA_ARCH_LIST"] = "12.0a"
+
 
 # Load CUDA extension module
 lib = load(
