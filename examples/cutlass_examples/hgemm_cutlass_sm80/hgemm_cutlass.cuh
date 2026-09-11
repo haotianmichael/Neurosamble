@@ -215,7 +215,7 @@ struct KernelSpec {
         cutlass::gemm::GemmUniversalMode::kGemm,
         {M, N, K},
         {(ElementA *)Aptr, stride_A, (ElementB *)Bptr, stride_B},
-        {{(ElementAccumulator)1.f, (ElementAccumulator)1.f}, (ElementC *)Cptr, stride_C, (ElementD *)Dptr, stride_D},
+        {{(ElementAccumulator)1.f, (ElementAccumulator)0.f}, (ElementC *)Cptr, stride_C, (ElementD *)Dptr, stride_D},
         kernel_hw_info};
 
     // Using the arguments, query for extra workspace required for matrix multiplication computation
