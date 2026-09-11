@@ -1,0 +1,22 @@
+{
+  "version": 4,
+  "configurations": [
+    {
+      "name": "cuda",
+      "includePath": [
+        "${workspaceFolder}/**",
+        "${workspaceFolder}/third-party/cutlass/include",
+        "${workspaceFolder}/third-party/cutlass/tools/util/include",
+        "/root/miniconda3/lib/python3.12/site-packages/torch/include",
+        "/root/miniconda3/lib/python3.12/site-packages/torch/include/torch/csrc/api/include",
+        "/root/miniconda3/include/python3.12",
+        "/usr/local/cuda/include"
+      ],
+      "defines": ["__CUDACC__", "CUTE_SM90_EXTENDED_MMA_SHAPES_ENABLED"],
+      "compilerPath": "/usr/local/cuda/bin/nvcc",
+      "cStandard": "c17",
+      "cppStandard": "c++17",
+      "intelliSenseMode": "linux-gcc-x64"
+    }
+  ]
+}
