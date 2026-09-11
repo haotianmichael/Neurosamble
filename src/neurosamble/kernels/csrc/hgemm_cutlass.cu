@@ -216,7 +216,7 @@ struct KernelSpec {
 } // namespace spec
 
 // Explicit instantiation of the FP16 kernel.
-template struct spec::KernelSpec<cutlass::half_t, cute::half_t, cute::half_t, float, float, 128, 128, 32>;
+template struct spec::KernelSpec<cutlass::half_t, cute::half_t, cute::half_t, float, float, 128, 128, 64>;
 
 // Python-facing entry point. Contract (unchanged): C = A @ B, all row-major.
 //   A : [M, K] row-major
@@ -244,7 +244,7 @@ torch::Tensor gemm(torch::Tensor A, torch::Tensor B) {
         auto options = torch::TensorOptions().dtype(A.scalar_type()).device(A.device());
         torch::Tensor C = torch::empty({M, N}, options);
         cudaStream_t stream = at::cuda::getCurrentCUDAStream();
-        using Kernel = spec::KernelSpec<cutlass::half_t, cute::half_t, cute::half_t, float, float, 128, 128, 32>;
+        using Kernel = spec::KernelSpec<cutlass::half_t, cute::half_t, cute::half_t, float, float, 128, 128, 64>;
         Kernel::run(A.data_ptr(), Bt.data_ptr(), C.data_ptr(), C.data_ptr(), M, N, K, stream);
         cudaStreamSynchronize(stream);
         return C;
