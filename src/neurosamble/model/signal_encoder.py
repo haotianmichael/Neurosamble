@@ -1,5 +1,5 @@
 """
-Signal-domain encoder: Conv front-end + N x TransformerEncoderLayer.
+Signal-domain encoder: Conv front-end + N x sequence-body blocks.
 
 Dimension flow::
 
@@ -9,7 +9,7 @@ Dimension flow::
       -> Conv1d(C1 -> C2, k=downsample_factor, stride=downsample)  (B, C2, T)
       -> transpose                                                 (B, T, C2)
       -> Linear(C2 -> D)                                           (B, T, D)
-      -> N x TransformerEncoderLayer(d_model=D)                    (B, T, D) = last_hidden
+      -> N x <body>(d_model=D)                                     (B, T, D) = last_hidden
 
 The returned ``last_hidden`` [B, T, D] plugs straight into ``AveragePooler`` and
 therefore into the contrastive training loop unchanged.
@@ -19,9 +19,12 @@ The ``attention_mask`` passed in must already be at the *T* resolution (see
 ``output_length`` / ``downsample_mask`` helpers used by the dataset), otherwise
 it will not align with ``last_hidden`` inside the pooler.
 
-``encoder_type`` selects the sequence body: ``'transformer'`` (default) or
-``'cnn_rnn'`` (reserved for the M2 ablation). The transformer body exposes
-attention + FFN as writable CuTe/CUTLASS kernel targets.
+``encoder_type`` selects the sequence body:
+  * ``'transformer'`` (default) -- N x TransformerEncoderLayer; exposes
+    attention + FFN as writable CuTe/CUTLASS kernel targets.
+  * ``'mamba'`` -- N x pre-norm residual Mamba-2 blocks (requires the official
+    ``mamba-ssm`` package). Used to reproduce the state-space encoder.
+  * ``'cnn_rnn'`` -- reserved for the M2 ablation.
 """
 from __future__ import annotations
 
@@ -31,6 +34,8 @@ import torch
 import torch.nn as nn
 
 from neurosamble.kernels import MyLinear
+
+
 class _PreNormResidual(nn.Module):
     """x -> x + sublayer(norm(x))."""
 
@@ -57,6 +62,11 @@ class SignalEncoder(nn.Module):
         embedding_dim: int = 384,
         input_signal_len: int = 2000,
         use_custom_kernels: bool = False,
+        # --- mamba-specific (only used when encoder_type == 'mamba') ---
+        n_mamba_blocks: Optional[int] = None,
+        d_state: int = 128,
+        d_conv: int = 4,
+        expand: int = 2,
         **kwargs,
     ):
         super().__init__()
@@ -64,6 +74,10 @@ class SignalEncoder(nn.Module):
         self.downsample_factor = downsample_factor
         self.embedding_dim = embedding_dim
         self.input_signal_len = input_signal_len
+
+        # mamba checkpoints carry the block count as ``n_mamba_blocks``; honor it.
+        if n_mamba_blocks is not None:
+            n_blocks = n_mamba_blocks
 
         # --- Conv front-end -------------------------------------------------
         self.conv1 = nn.Conv1d(
@@ -78,21 +92,19 @@ class SignalEncoder(nn.Module):
         )
         self.act = nn.GELU()
         self.proj = nn.Linear(conv_channels_2, embedding_dim)
-        # First CuTe/CUTLASS replacement target. Default off -> uses the torch
-        # fallback (F.linear), so behavior is identical to nn.Linear unless
-        # ``use_custom_kernels=True`` is passed explicitly.
-        #self.proj = MyLinear(
-        #    conv_channels_2, embedding_dim, use_custom=use_custom_kernels,
-        #)
+        # NOTE: MyLinear (CuTe/CUTLASS target) kept available but proj stays
+        # nn.Linear so mamba/transformer checkpoints load with identical keys.
 
         # --- Sequence body --------------------------------------------------
         self.blocks = self._build_body(
             encoder_type, embedding_dim, n_blocks, num_heads, dropout,
+            d_state, d_conv, expand,
         )
         self.final_norm = nn.LayerNorm(embedding_dim)
 
     def _build_body(
         self, encoder_type, d_model, n_blocks, num_heads, dropout,
+        d_state, d_conv, expand,
     ) -> nn.ModuleList:
         if encoder_type == "transformer":
             return nn.ModuleList(
@@ -103,13 +115,32 @@ class SignalEncoder(nn.Module):
                 for _ in range(n_blocks)
             )
 
+        if encoder_type == "mamba":
+            try:
+                from mamba_ssm import Mamba2
+            except ImportError as e:  # pragma: no cover - env dependent
+                raise ImportError(
+                    "encoder_type='mamba' requires the official mamba-ssm package: "
+                    "pip install mamba-ssm causal-conv1d"
+                ) from e
+            return nn.ModuleList(
+                _PreNormResidual(
+                    d_model,
+                    Mamba2(d_model=d_model, d_state=d_state, d_conv=d_conv, expand=expand),
+                )
+                for _ in range(n_blocks)
+            )
+
         if encoder_type == "cnn_rnn":
             return nn.ModuleList(
                 _PreNormResidual(d_model, _BiGRU(d_model, dropout))
                 for _ in range(n_blocks)
             )
 
-        raise ValueError(f"Unknown encoder_type: {encoder_type!r} (expected 'transformer' or 'cnn_rnn')")
+        raise ValueError(
+            f"Unknown encoder_type: {encoder_type!r} "
+            "(expected 'transformer', 'mamba', or 'cnn_rnn')"
+        )
 
     # ------------------------------------------------------------------ #
     def output_length(self, input_len: int) -> int:
@@ -118,7 +149,6 @@ class SignalEncoder(nn.Module):
 
     def downsample_mask(self, attention_mask_l: torch.Tensor) -> torch.Tensor:
         """Reduce an L-resolution mask to the T resolution via strided max-pool."""
-        # (B, L) -> (B, 1, L) -> pool -> (B, T)
         m = attention_mask_l.unsqueeze(1).float()
         pooled = torch.nn.functional.max_pool1d(
             m, kernel_size=self.downsample_factor, stride=self.downsample_factor,
@@ -132,7 +162,6 @@ class SignalEncoder(nn.Module):
         attention_mask: Optional[torch.Tensor] = None,
         **kwargs,
     ) -> torch.Tensor:
-        # Accept (B, L) or (B, L, 1)
         if signal.dim() == 3:
             signal = signal.squeeze(-1)
         x = signal.unsqueeze(1).float()          # (B, 1, L)
@@ -142,8 +171,6 @@ class SignalEncoder(nn.Module):
         x = x.transpose(1, 2)                    # (B, T, C2)
         x = self.proj(x)                         # (B, T, D)
 
-        # Zero out padded time steps before the sequence body so padding does
-        # not leak through the sequence layers.
         if attention_mask is not None and attention_mask.shape[1] == x.shape[1]:
             x = x * attention_mask.unsqueeze(-1).to(x.dtype)
 
@@ -175,7 +202,11 @@ def signal_encoder_from_config(cfg) -> "SignalEncoder":
         conv_channels_2=cfg.conv_channels_2,
         conv_kernel_1=cfg.conv_kernel_1,
         downsample_factor=cfg.downsample_factor,
-        n_blocks=cfg.n_blocks,
+        n_blocks=getattr(cfg, "n_blocks", getattr(cfg, "n_mamba_blocks", 6)),
+        n_mamba_blocks=getattr(cfg, "n_mamba_blocks", None),
+        d_state=getattr(cfg, "d_state", 128),
+        d_conv=getattr(cfg, "d_conv", 4),
+        expand=getattr(cfg, "expand", 2),
         num_heads=cfg.num_heads,
         dropout=cfg.dropout,
         embedding_dim=cfg.embedding_dim,
