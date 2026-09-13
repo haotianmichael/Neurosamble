@@ -30,7 +30,7 @@ def parse_args():
     p = argparse.ArgumentParser(description="Phase 4 IVF index build (CPU, checkpointed)")
     p.add_argument("--encode_dir", required=True, help="dir with encode_manifest.json + shards")
     p.add_argument("--out_dir", required=True)
-    p.add_argument("--index_type", choices=["ivfflat", "ivfpq"], default="ivfflat")
+    p.add_argument("--index_type", choices=["ivfflat", "ivfpq", "ivfsq"], default="ivfflat")
     p.add_argument("--pq_m", type=int, default=48, help="ivfpq subquantizers (D must be divisible)")
     p.add_argument("--train_sample", type=int, default=2_000_000, help="max vectors to train nlist")
     p.add_argument("--add_chunk", type=int, default=1_000_000, help="rows per add() call")
@@ -39,10 +39,10 @@ def parse_args():
     return p.parse_args()
 
 
-def _shard_emb_memmap(encode_dir, sh, D):
+def _shard_emb_memmap(encode_dir, sh, D, dtype=np.float32):
     path = os.path.join(encode_dir, sh["emb_file"])
     n = int(sh["n_rows"])
-    return np.memmap(path, dtype=np.float32, mode="r", shape=(n, D))
+    return np.memmap(path, dtype=dtype, mode="r", shape=(n, D))
 
 
 def main():
@@ -68,6 +68,7 @@ def main():
     D = int(manifest["D"])
     shards = manifest["shards"]
     total_nw = int(manifest["total_n_windows"])
+    emb_dtype = np.float16 if manifest.get("dtype", "float32") == "float16" else np.float32
     print(f"[ivf] D={D} total_windows={total_nw} shards={len(shards)} "
           f"index_type={args.index_type}", flush=True)
 
@@ -91,6 +92,12 @@ def main():
         if D % args.pq_m != 0:
             raise SystemExit(f"[ivf] D={D} not divisible by pq_m={args.pq_m}")
         index = faiss.IndexIVFPQ(quantizer, D, nlist, args.pq_m, 8, faiss.METRIC_INNER_PRODUCT)
+    elif args.index_type == "ivfsq":
+        # fp16 scalar quantizer: ~half the RAM/disk of IVFFlat, negligible recall
+        # loss on L2-normalized cosine vectors (unlike IVFPQ). GPU-cloneable.
+        index = faiss.IndexIVFScalarQuantizer(
+            quantizer, D, nlist,
+            faiss.ScalarQuantizer.QT_fp16, faiss.METRIC_INNER_PRODUCT)
     else:
         index = faiss.IndexIVFFlat(quantizer, D, nlist, faiss.METRIC_INNER_PRODUCT)
     print(f"[ivf] nlist={nlist} metric=INNER_PRODUCT (cosine on normalized vectors)", flush=True)
@@ -102,11 +109,11 @@ def main():
         per_shard = max(1, args.train_sample // max(1, len(shards)))
         train_parts = []
         for sh in shards:
-            mm = _shard_emb_memmap(args.encode_dir, sh, D)
+            mm = _shard_emb_memmap(args.encode_dir, sh, D, emb_dtype)
             n = mm.shape[0]
             take = min(per_shard, n)
             idx = np.sort(rng.choice(n, size=take, replace=False)) if take < n else np.arange(n)
-            train_parts.append(np.ascontiguousarray(mm[idx]))
+            train_parts.append(np.ascontiguousarray(mm[idx]).astype(np.float32, copy=False))
         train = np.concatenate(train_parts, axis=0).astype(np.float32)
         print(f"[ivf] training on {train.shape[0]} vectors...", flush=True)
         index.train(train)
@@ -115,10 +122,10 @@ def main():
         # 4) Add every shard's vectors in shard order (chunked to bound memory).
         added = 0
         for sh in shards:
-            mm = _shard_emb_memmap(args.encode_dir, sh, D)
+            mm = _shard_emb_memmap(args.encode_dir, sh, D, emb_dtype)
             n = mm.shape[0]
             for start in range(0, n, args.add_chunk):
-                chunk = np.ascontiguousarray(mm[start:start + args.add_chunk])
+                chunk = np.ascontiguousarray(mm[start:start + args.add_chunk]).astype(np.float32, copy=False)
                 index.add(chunk)
                 added += chunk.shape[0]
             print(f"[ivf] added shard rank{sh['rank']} ({n} rows); total added={added}",

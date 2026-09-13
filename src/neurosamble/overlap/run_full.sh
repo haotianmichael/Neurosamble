@@ -98,7 +98,7 @@ else
   echo "[full] === (a) encode (${NUM_GPUS}-GPU sharded) ==="
   "$TORCHRUN" --nproc_per_node="$NUM_GPUS" -m neurosamble.overlap.encode \
     --real_reads "$REAL_BLOW5" --load_encoder "$LOAD_ENCODER" \
-    --out_dir "$OUTDIR/encode" --win "$WIN" --stride "$STRIDE" \
+    --out_dir "$OUTDIR/encode" --win "$WIN" --stride "$STRIDE" --encode_batch "${ENCODE_BATCH:-2048}" --fp16_out \
     2>&1 | tee "$OUTDIR/encode.log"
 
   echo "[full] === (b) IVF index build (CPU, checkpointed) ==="

@@ -137,6 +137,7 @@ def main():
     D = int(manifest["D"])
     win_bp = max(1, int(manifest["win"]) // spk)
     shards = manifest["shards"]
+    emb_dtype = np.float16 if manifest.get("dtype", "float32") == "float16" else np.float32
 
     # Global-row -> shard memmap mapping (row order == shard concatenation order).
     cum = [0]
@@ -144,7 +145,7 @@ def main():
     for sh in shards:
         n = int(sh["n_rows"])
         mm = np.memmap(os.path.join(args.encode_dir, sh["emb_file"]),
-                       dtype=np.float32, mode="r", shape=(n, D))
+                       dtype=emb_dtype, mode="r", shape=(n, D))
         mmaps.append(mm)
         cum.append(cum[-1] + n)
     cum = np.asarray(cum)
@@ -187,6 +188,11 @@ def main():
             faiss.GpuParameterSpace().set_index_parameter(index, "nprobe", args.nprobe)
         except Exception:
             pass
+        # The fp32 CPU index was replaced by the GPU clone above; drop it now so its
+        # ~43 GB (IVFFlat, 28M x 384 fp32) is freed BEFORE the query loop faults the
+        # embedding memmap into page cache -- stops host RSS from stacking both.
+        import gc
+        gc.collect()
     print(f"[map] N_windows={N} nprobe={args.nprobe} topk={args.topk} spk={spk} win_bp={win_bp} "
           f"gpu={args.faiss_gpu} query_batch={args.query_batch} gpu_temp_mb={args.gpu_temp_mb} "
           f"thresholds(mcs={args.min_chaining_score},"
@@ -195,7 +201,8 @@ def main():
     def shard_rows(i, j):
         """Vectors for global rows [i, j) -- a single read is within one shard."""
         s = int(np.searchsorted(cum, i, side="right") - 1)
-        return np.ascontiguousarray(mmaps[s][i - cum[s]: j - cum[s]])
+        v = np.ascontiguousarray(mmaps[s][i - cum[s]: j - cum[s]])
+        return v.astype(np.float32, copy=False)   # FAISS search needs float32
 
     # Per-read groups = maximal runs of equal gid in row order.
     boundaries = np.flatnonzero(np.diff(win_gid)) + 1
