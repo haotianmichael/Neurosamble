@@ -115,6 +115,7 @@ else
     --min_num_anchors "$MIN_NUM_ANCHORS" --min_chaining_score "$MIN_CHAINING_SCORE" \
     --max_gap_bp "$MAX_GAP_BP" --bw_bp "$BW_BP" \
     --query_batch "$QUERY_BATCH" --gpu_temp_mb "$GPU_TEMP_MB" \
+    --gpu_id "${QUERY_GPU_ID:--1}" --chain_workers "${CHAIN_WORKERS:-0}" \
     2>&1 | tee "$OUTDIR/query.log"
 fi
 
