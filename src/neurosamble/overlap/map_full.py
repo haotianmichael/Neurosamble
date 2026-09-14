@@ -23,9 +23,12 @@ Chaining parallelism
 --------------------
 The per-read chaining (anchor-dict build + colinear DP + PAF formatting) is the
 CPU bottleneck. ``--chain_workers`` distributes it across processes, ONE read per
-unit of work, mirroring minimap2/rawhash2's read-level threading. The GPU search
-stays on the main process. Results are byte-identical to the serial path: W=1 and
-W>1 run the SAME chaining code; the pool's outputs are reassembled in read order.
+unit of work, mirroring minimap2/rawhash2's read-level threading. The GPU search stays on the main process but is BATCHED ACROSS READS: consecutive
+reads are gathered until ~``--query_batch`` window vectors accumulate, then searched
+in ONE faiss call (so the GPU is actually fed), and results are split back per read.
+IVF search is per-query, so batched vs per-read search gives identical neighbors.
+Results are byte-identical to the serial path: W=1 and W>1 run the SAME chaining
+code; the pool's outputs are reassembled in read order.
 The worker pool is forked BEFORE any CUDA init (so children are CUDA-clean and do
 not inherit the large GPU index), and the big read-only tables are shared via fork
 copy-on-write rather than pickled.
@@ -312,17 +315,10 @@ def main():
           f"thresholds(mcs={args.min_chaining_score},"
           f"mna={args.min_num_anchors},gap={args.max_gap_bp},bw={args.bw_bp})", flush=True)
 
-    def shard_rows(i, j):
-        """Vectors for global rows [i, j) -- a single read is within one shard."""
-        s = int(np.searchsorted(cum, i, side="right") - 1)
-        v = np.ascontiguousarray(mmaps[s][i - cum[s]: j - cum[s]])
-        return v.astype(np.float32, copy=False)   # FAISS search needs float32
-
     out = open(args.out_paf, "w")
     n_reads = n_pairs = n_chains = 0
     t0 = time.time()
 
-    # Bounded in-flight futures preserve read order (FIFO) => byte-identical PAF.
     import collections
     inflight = collections.deque()
     max_inflight = max(2, W * 3)
@@ -335,32 +331,59 @@ def main():
         n_pairs += p_
         n_chains += c_
 
-    for i, j in zip(starts.tolist(), ends.tolist()):
-        r_gid = int(win_gid[i])
-        r_name = id2name[r_gid]
-        if r_name is None:
-            continue
-        n_reads += 1
-        r_rank = int(name_rank[r_gid])
-        qvecs = shard_rows(i, j)
-        q_offs = win_off[i:j]
-        scores, ids = batched_search(index, qvecs, args.topk, args.query_batch)
+    def read_rows_range(i, j):
+        """Embeddings for global rows [i, j) as contiguous f32 [j-i, D].
 
-        nid = ids.reshape(-1)
-        sc = scores.reshape(-1)
-        qoff = np.repeat(q_offs, args.topk)
-        t_gid, t_off, q_kept, s_kept = filter_neighbors(
-            r_gid, r_rank, nid, sc, qoff, win_gid, win_off, name_rank)
+        Handles a range that straddles the (single) shard boundary by reading
+        each shard's slice and concatenating.
+        """
+        parts = []
+        s = int(np.searchsorted(cum, i, side="right") - 1)
+        ii = i
+        while ii < j:
+            s_end = int(cum[s + 1])
+            k = min(j, s_end)
+            parts.append(mmaps[s][ii - int(cum[s]): k - int(cum[s])])
+            ii = k
+            s += 1
+        v = parts[0] if len(parts) == 1 else np.concatenate(parts, 0)
+        return np.ascontiguousarray(v).astype(np.float32, copy=False)
 
-        if t_gid.size:
+    read_spans = list(zip(starts.tolist(), ends.tolist()))
+    SB = max(1, int(args.query_batch))     # windows gathered + searched per faiss call
+
+    grp = []            # consecutive (rs, re, r_gid)
+    grp_start = None
+
+    def flush_group():
+        nonlocal n_pairs, n_chains, batch, grp, grp_start
+        if not grp:
+            return
+        g0 = grp_start
+        g1 = grp[-1][1]
+        qv = read_rows_range(g0, g1)
+        # ONE batched search over the whole block (sub-chunked internally to bound
+        # GPU temp mem); per-query results are identical to searching each read alone.
+        scores, ids = batched_search(index, qv, args.topk, SB)
+        for (rs, re, rg) in grp:
+            a = rs - g0
+            b = re - g0
+            r_name = id2name[rg]
+            r_rank = int(name_rank[rg])
+            nid = ids[a:b].reshape(-1)
+            sc = scores[a:b].reshape(-1)
+            qoff = np.repeat(win_off[rs:re], args.topk)
+            t_gid, t_off, q_kept, s_kept = filter_neighbors(
+                rg, r_rank, nid, sc, qoff, win_gid, win_off, name_rank)
+            if t_gid.size == 0:
+                continue
             order = np.argsort(t_gid, kind="stable")
             tg = np.ascontiguousarray(t_gid[order]).astype(np.int32, copy=False)
             to = np.ascontiguousarray(t_off[order]).astype(np.int32, copy=False)
             qo = np.ascontiguousarray(q_kept[order]).astype(np.int32, copy=False)
             ss = np.ascontiguousarray(s_kept[order]).astype(np.float32, copy=False)
-            qlen = max(1, int(nsamp[r_gid]) // spk)
+            qlen = max(1, int(nsamp[rg]) // spk)
             job = (r_name, qlen, tg, to, qo, ss)
-
             if pool is not None:
                 batch.append(job)
                 if len(batch) >= args.chain_batch:
@@ -373,13 +396,26 @@ def main():
                 out.write(s_)
                 n_pairs += p_
                 n_chains += c_
+        grp = []
+        grp_start = None
 
+    for (i, j) in read_spans:
+        rg = int(win_gid[i])
+        if id2name[rg] is None:
+            continue
+        n_reads += 1
+        if grp_start is None:
+            grp_start = i
+        grp.append((i, j, rg))
+        if (j - grp_start) >= SB:
+            flush_group()
         if (n_reads % 20000) == 0:
             dt = time.time() - t0
             print(f"[map] reads={n_reads} pairs>={n_pairs} chains>={n_chains} "
                   f"({n_reads/max(dt,1e-9):.0f} reads/s)", flush=True)
 
-    # flush the tail
+    flush_group()   # tail block
+
     if pool is not None:
         if batch:
             inflight.append(pool.apply_async(_chain_batch, (batch,)))
