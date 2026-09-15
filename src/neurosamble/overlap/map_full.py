@@ -149,6 +149,10 @@ def parse_args():
                    help="max query rows per index.search call (chunks GPU temp mem)")
     p.add_argument("--gpu_temp_mb", type=int, default=8192,
                    help="FAISS GPU temp-memory pool per device (MB)")
+    p.add_argument("--neighbors_bin", default="",
+                   help="precomputed GPU-RaBitQ neighbors int64 [N,topk]; if set, skip faiss")
+    p.add_argument("--dists_bin", default="",
+                   help="precomputed scores float32 [N,topk] (pairs with --neighbors_bin)")
     return p.parse_args()
 
 
@@ -204,10 +208,12 @@ def main():
     args = parse_args()
     spk = max(1, int(args.samples_per_kmer))
 
-    import faiss
+    use_precomp = bool(args.neighbors_bin)
 
-    if args.threads > 0:
-        faiss.omp_set_num_threads(args.threads)
+    if not use_precomp:
+        import faiss
+        if args.threads > 0:
+            faiss.omp_set_num_threads(args.threads)
 
     with open(os.path.join(args.encode_dir, "encode_manifest.json")) as f:
         manifest = json.load(f)
@@ -263,51 +269,61 @@ def main():
             pool = None
             W = 1
 
-    index = faiss.read_index(os.path.join(args.index_dir, "ivf.index"))
-    try:
-        index.nprobe = args.nprobe
-    except Exception:
-        faiss.ParameterSpace().set_index_parameter(index, "nprobe", args.nprobe)
+    nbr_mm = dist_mm = None
+    index = None
+    gpu_res = []
+    if use_precomp:
+        nbr_mm = np.memmap(args.neighbors_bin, dtype=np.int64, mode="r", shape=(N, args.topk))
+        dist_mm = np.memmap(args.dists_bin, dtype=np.float32, mode="r", shape=(N, args.topk))
+        print(f"[map] precomputed RaBitQ neighbors {args.neighbors_bin} "
+              f"[N={N}, topk={args.topk}] -- faiss search skipped", flush=True)
+    else:
+        index = faiss.read_index(os.path.join(args.index_dir, "ivf.index"))
+        try:
+            index.nprobe = args.nprobe
+        except Exception:
+            faiss.ParameterSpace().set_index_parameter(index, "nprobe", args.nprobe)
 
-    gpu_res = []  # keep GPU resources alive for the index's lifetime
-    if args.faiss_gpu:
-        temp_bytes = int(args.gpu_temp_mb) * 1024 * 1024
-        if args.gpu_id >= 0:
-            print(f"[map] single GPU {args.gpu_id} (fp16), temp={args.gpu_temp_mb}MB", flush=True)
-            co = faiss.GpuClonerOptions()
-            co.useFloat16 = True
-            res = faiss.StandardGpuResources()
-            res.setTempMemory(temp_bytes)
-            gpu_res = [res]
-            index = faiss.index_cpu_to_gpu(res, int(args.gpu_id), index, co)
-            try:
-                faiss.GpuParameterSpace().set_index_parameter(index, "nprobe", args.nprobe)
-            except Exception:
-                pass
-        else:
-            print("[map] sharding index across all visible GPUs (fp16)", flush=True)
-            co = faiss.GpuMultipleClonerOptions()
-            co.shard = True
-            co.useFloat16 = True
-            try:
-                ngpu = faiss.get_num_gpus()
-                gpu_res = [faiss.StandardGpuResources() for _ in range(ngpu)]
-                for r in gpu_res:
-                    r.setTempMemory(temp_bytes)
-                index = faiss.index_cpu_to_gpu_multiple_py(gpu_res, index, co)
-                print(f"[map] GPU temp mem = {args.gpu_temp_mb} MB x {ngpu} GPU(s)", flush=True)
-            except Exception as e:  # noqa: BLE001
-                print(f"[map][warn] explicit GPU resources failed ({e}); "
-                      f"falling back to index_cpu_to_all_gpus", flush=True)
-                index = faiss.index_cpu_to_all_gpus(index, co=co)
-            try:
-                faiss.GpuParameterSpace().set_index_parameter(index, "nprobe", args.nprobe)
-            except Exception:
-                pass
-        # Free the fp32/CPU index now (its ~tens of GB) before the query loop
-        # faults the embedding memmap into page cache.
-        import gc
-        gc.collect()
+        gpu_res = []  # keep GPU resources alive for the index's lifetime
+        if args.faiss_gpu:
+            temp_bytes = int(args.gpu_temp_mb) * 1024 * 1024
+            if args.gpu_id >= 0:
+                print(f"[map] single GPU {args.gpu_id} (fp16), temp={args.gpu_temp_mb}MB", flush=True)
+                co = faiss.GpuClonerOptions()
+                co.useFloat16 = True
+                res = faiss.StandardGpuResources()
+                res.setTempMemory(temp_bytes)
+                gpu_res = [res]
+                index = faiss.index_cpu_to_gpu(res, int(args.gpu_id), index, co)
+                try:
+                    faiss.GpuParameterSpace().set_index_parameter(index, "nprobe", args.nprobe)
+                except Exception:
+                    pass
+            else:
+                print("[map] sharding index across all visible GPUs (fp16)", flush=True)
+                co = faiss.GpuMultipleClonerOptions()
+                co.shard = True
+                co.useFloat16 = True
+                try:
+                    ngpu = faiss.get_num_gpus()
+                    gpu_res = [faiss.StandardGpuResources() for _ in range(ngpu)]
+                    for r in gpu_res:
+                        r.setTempMemory(temp_bytes)
+                    index = faiss.index_cpu_to_gpu_multiple_py(gpu_res, index, co)
+                    print(f"[map] GPU temp mem = {args.gpu_temp_mb} MB x {ngpu} GPU(s)", flush=True)
+                except Exception as e:  # noqa: BLE001
+                    print(f"[map][warn] explicit GPU resources failed ({e}); "
+                          f"falling back to index_cpu_to_all_gpus", flush=True)
+                    index = faiss.index_cpu_to_all_gpus(index, co=co)
+                try:
+                    faiss.GpuParameterSpace().set_index_parameter(index, "nprobe", args.nprobe)
+                except Exception:
+                    pass
+            # Free the fp32/CPU index now (its ~tens of GB) before the query loop
+            # faults the embedding memmap into page cache.
+            import gc
+            gc.collect()
+
 
     print(f"[map] N_windows={N} nprobe={args.nprobe} topk={args.topk} spk={spk} win_bp={win_bp} "
           f"gpu={args.faiss_gpu} gpu_id={args.gpu_id} chain_workers={W} "
@@ -361,10 +377,14 @@ def main():
             return
         g0 = grp_start
         g1 = grp[-1][1]
-        qv = read_rows_range(g0, g1)
-        # ONE batched search over the whole block (sub-chunked internally to bound
-        # GPU temp mem); per-query results are identical to searching each read alone.
-        scores, ids = batched_search(index, qv, args.topk, SB)
+        if use_precomp:
+            ids = np.ascontiguousarray(nbr_mm[g0:g1])
+            scores = np.ascontiguousarray(dist_mm[g0:g1])
+        else:
+            qv = read_rows_range(g0, g1)
+            # ONE batched search over the block (sub-chunked to bound GPU temp mem);
+            # per-query results are identical to searching each read alone.
+            scores, ids = batched_search(index, qv, args.topk, SB)
         for (rs, re, rg) in grp:
             a = rs - g0
             b = re - g0
