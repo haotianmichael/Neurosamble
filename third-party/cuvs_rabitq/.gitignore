@@ -1,0 +1,90 @@
+## common
+__pycache__
+*.pyc
+*~
+\#*
+.#*
+*.o
+*.so
+*.dylib
+.cache
+.coverage
+.vscode
+*.swp
+*.pytest_cache
+htmlcov
+build/
+build_prims/
+dist/
+python/**/**/*.cpp
+python/cuvs/record.txt
+log
+.ipynb_checkpoints
+.DS_Store
+dask-worker-space/
+*.egg-info/
+*.bin
+bench/ann/data
+temporary_*.json
+rust/target/
+rust/Cargo.lock
+rmm_log.txt
+
+## example notebooks
+notebooks/simplewiki-2020-11-01-nq-distilbert-base-v1.pt
+notebooks/data/
+
+## scikit-build
+_skbuild
+
+## eclipse
+.project
+.cproject
+.settings
+.ptp-sync-folder
+
+## Pycharm
+.idea
+
+## ccls
+.ccls-cache
+.ccls
+
+## profiling
+*.qdrep
+*.qdrep.cache
+*.qdstrm
+*.nvprof
+
+## doxygen build check inside ci/checks/style.sh
+doxygen_check/
+
+## cibuildwheel
+/wheelhouse
+
+# doxygen
+_xml
+
+# sphinx
+_html
+_text
+docs/source/_static/rust
+
+# clang tooling
+compile_commands.json
+.clangd/
+
+# serialized ann indexes
+brute_force_index
+cagra_index
+ivf_flat_index
+ivf_pq_index
+
+# cuvs_bench
+# Leading slash to only ignore top-level `datasets/ directory -- otherwise
+# `python/cuvs_bench/cuvs_bench/config/datasets/` also gets ignored
+/datasets/
+/*.json
+
+# java
+.classpath

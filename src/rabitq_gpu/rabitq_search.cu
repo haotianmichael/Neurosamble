@@ -23,10 +23,14 @@
 #include <raft/core/device_mdspan.hpp>
 
 #include <rmm/device_uvector.hpp>
+#include <rmm/mr/managed_memory_resource.hpp>
+#include <raft/core/resource/resource_types.hpp>
+#include <raft/core/resource/device_memory_resource.hpp>
 #include <cuda_runtime.h>
 
 #include <cstdint>
 #include <cstdio>
+#include <chrono>
 #include <cstdlib>
 #include <cstring>
 #include <fstream>
@@ -85,6 +89,11 @@ int main(int argc, char** argv) {
   std::fflush(stderr);
 
   raft::device_resources handle;
+  // Route the LARGE workspace to managed (UVM) memory so a dataset bigger than
+  // GPU RAM still builds via the NON-streaming path (streaming is broken on sm_70).
+  static rmm::mr::managed_memory_resource s_managed;
+  raft::resource::set_large_workspace_resource(
+      handle, rmm::device_async_resource_ref(s_managed));
   cudaStream_t stream = handle.get_stream();
 
   // ---- 1) load fp16 embeddings -> host float32 [N, D] (row-major) ----
@@ -114,7 +123,7 @@ int main(int argc, char** argv) {
   if (!idxf.empty()) { std::ifstream t(idxf, std::ios::binary); have_index = t.good(); }
   if (have_index) {
     std::fprintf(stderr, "[rabitq] deserialize %s\n", idxf.c_str());
-    rabitq::deserialize(handle, idxf, &index);
+    auto _td=std::chrono::steady_clock::now(); rabitq::deserialize(handle, idxf, &index); std::fprintf(stderr, "[TIME] deserialize = %.1f s\n", std::chrono::duration<double>(std::chrono::steady_clock::now()-_td).count());
   } else {
     rabitq::index_params ip;
     ip.n_lists         = nlist;
@@ -122,6 +131,7 @@ int main(int argc, char** argv) {
     ip.kmeans_n_iters  = kiters;
     ip.force_streaming = false;                                  // host dataset -> stream to GPU
     ip.metric          = cuvs::distance::DistanceType::L2Expanded;  // normalized vecs: L2-nn == IP-max
+    auto _tb=std::chrono::steady_clock::now();
     std::fprintf(stderr, "[rabitq] building index (streaming)...\n");
     index = rabitq::build(handle, ip, dataset_v);
     std::fprintf(stderr, "[rabitq] built: dim=%lld; serialize->deserialize to reorganize...\n", (long long)index.dim());
@@ -132,9 +142,11 @@ int main(int argc, char** argv) {
     rabitq::deserialize(handle, tmpf, &reidx);
     index = std::move(reidx);
     std::fprintf(stderr, "[rabitq] reorganized (via %s)\n", tmpf.c_str());
+    std::fprintf(stderr, "[TIME] build+reorg = %.1f s\n", std::chrono::duration<double>(std::chrono::steady_clock::now()-_tb).count());
   }
 
   // ---- 3) all-vs-all search in batches; stream results to disk ----
+  auto _ts=std::chrono::steady_clock::now();
   std::ofstream fN(outN, std::ios::binary), fD(outD, std::ios::binary);
   if (!fN || !fD) { std::fprintf(stderr, "[rabitq] cannot open output files\n"); return 2; }
 
@@ -165,6 +177,7 @@ int main(int argc, char** argv) {
       std::fprintf(stderr, "[rabitq] searched %lld / %lld\n", (long long)(off + b), (long long)N);
   }
   fN.close(); fD.close();
+  std::fprintf(stderr, "[TIME] search+write = %.1f s\n", std::chrono::duration<double>(std::chrono::steady_clock::now()-_ts).count());
   std::fprintf(stderr, "[rabitq] DONE -> %s , %s\n", outN.c_str(), outD.c_str());
   return 0;
 }

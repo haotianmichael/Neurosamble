@@ -2,7 +2,7 @@
 	path = third-party/cutlass
 	url = https://ghfast.top/https://github.com/NVIDIA/cutlass.git
 	branch = main
-[submodule "third-party/cuvs_rabitq"]
-	path = third-party/cuvs_rabitq
-	url = https://ghfast.top/https://github.com/Stardust-SJF/cuvs_rabitq.git
-	branch = cuvs_ivf_rabitq
+#[submodule "third-party/cuvs_rabitq"]
+#	path = third-party/cuvs_rabitq
+#	url = https://ghfast.top/https://github.com/Stardust-SJF/cuvs_rabitq.git
+#	branch = cuvs_ivf_rabitq
