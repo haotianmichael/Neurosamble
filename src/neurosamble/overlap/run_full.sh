@@ -70,6 +70,12 @@ PY
 )
   EMB_FILE="${EMB_FILE:-$OUTDIR/encode/$EMB_REL}"
   echo "[full] N=$RQ_N D=$RQ_D emb=$EMB_FILE"
+  # --- ensure index/windows.npy + index/read_ids.txt exist (RaBitQ path skips index_ivf) ---
+  if [[ ! -s "$OUTDIR/index/windows.npy" || ! -s "$OUTDIR/index/read_ids.txt" ]]; then
+    echo "[full] building index/windows.npy + read_ids.txt from encode shards"
+    "$PYTHON" "$HERE/_merge_index.py" "$OUTDIR/encode" "$OUTDIR/index" 2>&1 | tee -a "$OUTDIR/merge.log"
+  fi
+
   RQ_NBR="$OUTDIR/index/neighbors.i64"; RQ_DIST="$OUTDIR/index/dists.f32"; RQ_IDX="$OUTDIR/index/rabitq.index"
 
   # (b) RaBitQ build + search (cuvsbuild). rabitq prints its own [TIME] build/search; we also wall-time it.
