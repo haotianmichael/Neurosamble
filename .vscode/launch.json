@@ -5,7 +5,7 @@
       "name": "CUDA debug (cuda-gdb)",
       "type": "cuda-gdb",
       "request": "launch",
-      "program": "/home/mahaotian/miniconda3/envs/py310/bin/python",
+      "program": "/root/miniconda3/bin/python",
       "args": ["launch.py"],
       "cwd": "${workspaceFolder}/examples/cutlass_examples/hgemm_cutlass_sm80",
       "environment": [{ "name": "CUDA_LAUNCH_BLOCKING", "value": "1" }],
