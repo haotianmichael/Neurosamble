@@ -32,6 +32,7 @@ CUVS_ENV="${CUVS_ENV:-cuvsbuild}"; CONDA_BASE="$(conda info --base 2>/dev/null |
 CUVS_LIB="${CUVS_LIB:-$CONDA_BASE/envs/$CUVS_ENV/lib}"
 PYTHON="${PYTHON:-python}"; TORCHRUN="${TORCHRUN:-torchrun}"
 MINIMAP2="${MINIMAP2:-minimap2}"; MINIASM="${MINIASM:-miniasm}"
+MINIASM_MIN_SPAN="${MINIASM_MIN_SPAN:-500}"  # miniasm -s: RS overlaps ~530bp median; default 2000 drops them all
 RAWHASH2="${RAWHASH2:-rawhash2}"; RAWHASH_PRESET="${RAWHASH_PRESET:-}"
 
 mkdir -p "$OUTDIR" "$OUTDIR/encode" "$OUTDIR/index"
@@ -140,9 +141,9 @@ if [[ "$DO_ASSEMBLY" != "0" ]]; then
     CLEAN="$OUTDIR/${tag}.clean.paf"; GFA="$OUTDIR/${tag}.gfa"
     "$PYTHON" -m neurosamble.overlap.sanitize_paf --in_paf "$PAF" --out_paf "$CLEAN" --reads_fasta "$READS_FASTA" 2>&1 | tee -a "$OUTDIR/sanitize.log"
     if [[ "$tag" == "mm2" ]]; then
-      "$MINIASM" -f "$READS_FASTA" "$CLEAN" > "$GFA" 2> "$OUTDIR/${tag}_miniasm.log" || true
+      "$MINIASM" -s "$MINIASM_MIN_SPAN" -f "$READS_FASTA" "$CLEAN" > "$GFA" 2> "$OUTDIR/${tag}_miniasm.log" || true
     else
-      "$MINIASM" "$CLEAN" > "$GFA" 2> "$OUTDIR/${tag}_miniasm.log" || true
+      "$MINIASM" -s "$MINIASM_MIN_SPAN" "$CLEAN" > "$GFA" 2> "$OUTDIR/${tag}_miniasm.log" || true
       if [[ ! -s "$GFA" ]]; then
         PLACE="$OUTDIR/${tag}.placeholder.fasta"
         "$PYTHON" -c '
@@ -157,7 +158,7 @@ for line in open(clean):
     if tl>L.get(c[5],0): L[c[5]]=tl
 open(out,"w").write("".join(">%s\n%s\n"%(k,"N"*n) for k,n in L.items()))
 ' "$CLEAN" "$PLACE" 2>&1 | tee -a "$OUTDIR/${tag}_miniasm.log" || true
-        "$MINIASM" -f "$PLACE" "$CLEAN" > "$GFA" 2> "$OUTDIR/${tag}_miniasm.log" || true
+        "$MINIASM" -s "$MINIASM_MIN_SPAN" -f "$PLACE" "$CLEAN" > "$GFA" 2> "$OUTDIR/${tag}_miniasm.log" || true
       fi
     fi
     [[ -s "$GFA" ]] && GFA_OF[$tag]="$GFA"
