@@ -88,7 +88,7 @@ PY
       conda run -n "$CUVS_ENV" --no-capture-output \
       "$RQ_BIN" --emb "$EMB_FILE" --emb_dtype fp16 --n "$RQ_N" --d "$RQ_D" \
         --nlist "$RQ_NLIST" --nprobe "$RQ_NPROBE" --topk "$TOPK" --bits "$RQ_BITS" \
-        --batch "$RQ_SEARCH_BATCH" --index "$RQ_IDX" \
+        --batch "$RQ_SEARCH_BATCH" --index "$RQ_IDX" ${RQ_EXTRA:-} \
         --out_nbr "$RQ_NBR" --out_dist "$RQ_DIST" 2>&1 | tee "$OUTDIR/rabitq.log"
     rabitq_total_sec=$(( $(_now) - _t )); echo "[TIME] rabitq(build+search) = ${rabitq_total_sec}s" | tee -a "$OUTDIR/timing.log"
     # split from rabitq.log [TIME] lines if present

@@ -81,6 +81,9 @@ int main(int argc, char** argv) {
   const uint32_t bits   = (uint32_t)std::atol(argval(argc, argv, "--bits",   "1")); // 1 = pure 1-bit RaBitQ
   const int64_t  B      = std::atoll(argval(argc, argv, "--batch",  "16384"));      // queries per search
   const uint32_t kiters = (uint32_t)std::atol(argval(argc, argv, "--kmeans_iters", "20"));
+  const std::string smode = argval(argc, argv, "--search_mode", "QUANT4"); // QUANT4|QUANT8|LUT16|LUT32
+  const std::string strat = argval(argc, argv, "--strategy",    "centroid_reorder"); // centroid_reorder|none
+  const float reorder_scale = (float)std::atof(argval(argc, argv, "--reorder_scale", "1.45"));
   if (emb.empty() || N <= 0) { std::fprintf(stderr, "need --emb <fp16 file> --n <N> [--d 384]\n"); return 2; }
 
   std::fprintf(stderr, "[rabitq][v3] N=%lld D=%lld nlist=%lld nprobe=%lld topk=%lld bits=%lld batch=%lld\n",
@@ -158,6 +161,18 @@ int main(int argc, char** argv) {
 
   rabitq::search_params sp;
   sp.n_probes = nprobe;
+  if      (smode == "QUANT8") sp.mode = rabitq::search_mode::QUANT8;
+  else if (smode == "LUT16")  sp.mode = rabitq::search_mode::LUT16;
+  else if (smode == "LUT32")  sp.mode = rabitq::search_mode::LUT32;
+  else                        sp.mode = rabitq::search_mode::QUANT4;
+  if (strat == "none") {
+    sp.strategy = rabitq::threshold_strategy::none;               // 关剪枝:第一簇全接纳
+  } else {
+    sp.strategy = rabitq::threshold_strategy::centroid_reorder;
+    sp.centroid_reorder_scale = reorder_scale;                    // 放松:调大更宽松
+  }
+  std::fprintf(stderr, "[rabitq] search_mode=%s strategy=%s reorder_scale=%.2f\n",
+               smode.c_str(), strat.c_str(), reorder_scale);
 
   for (int64_t off = 0; off < N; off += B) {
     int64_t b = std::min(B, N - off);
