@@ -23,7 +23,17 @@ namespace cuvs::neighbors::ivf_rabitq::detail {
 
 // block-level sorting used if topk <= kMaxTopKBlockSort; must be power of 2; increases shared mem
 // usage
-static constexpr int kMaxTopKBlockSort = 64;
+// PATCH(NS): raised from 64 to 256 (raft warpsort's maximum capacity) so topk in (64, 256]
+// stays on the pruned block-sort path. Above the cap the search falls back to writing every
+// probed candidate's distance to HBM plus a global select_k, which is infeasible at E. coli
+// scale. Override with -DRABITQ_MAX_TOPK_BLOCK_SORT=64.
+#ifndef RABITQ_MAX_TOPK_BLOCK_SORT
+#define RABITQ_MAX_TOPK_BLOCK_SORT 256
+#endif
+static_assert(RABITQ_MAX_TOPK_BLOCK_SORT == 64 || RABITQ_MAX_TOPK_BLOCK_SORT == 128 ||
+                RABITQ_MAX_TOPK_BLOCK_SORT == 256,
+              "RABITQ_MAX_TOPK_BLOCK_SORT must be 64, 128 or 256");
+static constexpr int kMaxTopKBlockSort = RABITQ_MAX_TOPK_BLOCK_SORT;
 
 class SearcherGPU {
  public:
