@@ -8,6 +8,7 @@
 #include <cuvs/cluster/kmeans.hpp>
 #include <cuvs/neighbors/ivf_rabitq.hpp>
 #include <rmm/mr/managed_memory_resource.hpp>
+#include <rmm/mr/per_device_resource.hpp>
 
 #include "../core/nvtx.hpp"
 #include "detail/ann_utils.cuh"
@@ -85,6 +86,10 @@ auto build(raft::resources const& handle,
     }
   }
 
+  // PATCH(NS): streaming never materialises the full dataset on device, so the remaining
+  // large buffers (kmeans trainset, labels) fit in plain device memory -- keep them off UVM.
+  if (use_streaming) { big_memory_resource = rmm::mr::get_current_device_resource_ref(); }
+
   // create device view of dataset (only if not using streaming)
   auto d_dataset_array =
     raft::make_device_mdarray<T>(handle, big_memory_resource, raft::make_extents<int64_t>(0, 0));
@@ -145,8 +150,28 @@ auto build(raft::resources const& handle,
       cluster_centers.data(), params.n_lists, dim);
     cuvs::cluster::kmeans::fit(
       handle, kmeans_params, raft::make_const_mdspan(trainset.view()), centers_view);
-    cuvs::cluster::kmeans::predict(
-      handle, kmeans_params, dataset_const_view, centers_const_view, labels_view);
+    if (use_streaming) {
+      // PATCH(NS): in streaming mode the dataset stays in pageable host memory, which a
+      // kernel cannot read on sm_70 (no HMM/ATS). Predict labels chunk by chunk instead:
+      // H2D one chunk -> predict -> write its slice of the device label array.
+      const int64_t chunk_rows = std::max<int64_t>(
+        1, std::min<int64_t>(n_rows, static_cast<int64_t>(params.streaming_batch_size) * 10));
+      auto d_chunk = raft::make_device_matrix<T, int64_t>(handle, chunk_rows, dim);
+      for (int64_t off = 0; off < static_cast<int64_t>(n_rows); off += chunk_rows) {
+        const int64_t m = std::min<int64_t>(chunk_rows, static_cast<int64_t>(n_rows) - off);
+        raft::copy(d_chunk.data_handle(), host_dataset_ptr + off * dim, m * dim, stream);
+        auto chunk_view =
+          raft::make_device_matrix_view<const T, int64_t>(d_chunk.data_handle(), m, dim);
+        auto chunk_labels =
+          raft::make_device_vector_view<uint32_t, int64_t>(labels.data() + off, m);
+        cuvs::cluster::kmeans::predict(
+          handle, kmeans_params, chunk_view, centers_const_view, chunk_labels);
+      }
+      raft::resource::sync_stream(handle);
+    } else {
+      cuvs::cluster::kmeans::predict(
+        handle, kmeans_params, dataset_const_view, centers_const_view, labels_view);
+    }
   }
 
   index<IdxT> index(handle, n_rows, dim, params.n_lists, params.bits_per_dim, params.rotator);

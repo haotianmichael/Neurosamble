@@ -84,19 +84,28 @@ int main(int argc, char** argv) {
   const std::string smode = argval(argc, argv, "--search_mode", "QUANT4"); // QUANT4|QUANT8|LUT16|LUT32
   const std::string strat = argval(argc, argv, "--strategy",    "centroid_reorder"); // centroid_reorder|none
   const float reorder_scale = (float)std::atof(argval(argc, argv, "--reorder_scale", "1.45"));
+  // --stream 1 : streaming build (host data, chunked kmeans predict, per-cluster batches) --
+  //              no UVM paging; required once N*D*4 bytes approaches GPU memory (E. coli R9/R10, human).
+  const bool     stream_build = std::atoi(argval(argc, argv, "--stream", "0")) != 0;
+  const size_t   stream_batch = (size_t)std::atoll(argval(argc, argv, "--stream_batch", "200000"));
+  const uint32_t train_per_cluster = (uint32_t)std::atol(argval(argc, argv, "--train_per_cluster", "256"));
   if (emb.empty() || N <= 0) { std::fprintf(stderr, "need --emb <fp16 file> --n <N> [--d 384]\n"); return 2; }
 
-  std::fprintf(stderr, "[rabitq][v3] N=%lld D=%lld nlist=%lld nprobe=%lld topk=%lld bits=%lld batch=%lld\n",
+  std::fprintf(stderr, "[rabitq][v4] N=%lld D=%lld nlist=%lld nprobe=%lld topk=%lld bits=%lld batch=%lld stream=%d\n",
                (long long)N, (long long)D, (long long)nlist, (long long)nprobe,
-               (long long)topk, (long long)bits, (long long)B);
+               (long long)topk, (long long)bits, (long long)B, (int)stream_build);
   std::fflush(stderr);
 
   raft::device_resources handle;
   // Route the LARGE workspace to managed (UVM) memory so a dataset bigger than
   // GPU RAM still builds via the NON-streaming path (streaming is broken on sm_70).
+  // Only the legacy non-streaming build needs this; with --stream 1 the whole run (build AND
+  // search) stays on plain device memory, so search batches are not squeezed by UVM.
   static rmm::mr::managed_memory_resource s_managed;
-  raft::resource::set_large_workspace_resource(
-      handle, rmm::device_async_resource_ref(s_managed));
+  if (!stream_build) {
+    raft::resource::set_large_workspace_resource(
+        handle, rmm::device_async_resource_ref(s_managed));
+  }
   cudaStream_t stream = handle.get_stream();
 
   // ---- 1) load fp16 embeddings -> host float32 [N, D] (row-major) ----
@@ -132,10 +141,12 @@ int main(int argc, char** argv) {
     ip.n_lists         = nlist;
     ip.bits_per_dim    = bits;                                  // 1 = binary RaBitQ
     ip.kmeans_n_iters  = kiters;
-    ip.force_streaming = false;                                  // host dataset -> stream to GPU
+    ip.force_streaming = stream_build;                           // true: no full-dataset copy on GPU
+    ip.streaming_batch_size = stream_batch;                      // must exceed the largest cluster
+    ip.max_train_points_per_cluster = train_per_cluster;
     ip.metric          = cuvs::distance::DistanceType::L2Expanded;  // normalized vecs: L2-nn == IP-max
     auto _tb=std::chrono::steady_clock::now();
-    std::fprintf(stderr, "[rabitq] building index (streaming)...\n");
+    std::fprintf(stderr, "[rabitq] building index (%s)...\n", stream_build ? "streaming" : "in-GPU/UVM");
     index = rabitq::build(handle, ip, dataset_v);
     std::fprintf(stderr, "[rabitq] built: dim=%lld; serialize->deserialize to reorganize...\n", (long long)index.dim());
     // REQUIRED: search only works correctly on a serialized+deserialized index
